@@ -21,7 +21,7 @@ PIL
 ## run
 
 ```shell
-python -u main.py
+bash icarl_shell.sh
 ```
 
 
