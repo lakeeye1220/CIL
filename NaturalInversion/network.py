@@ -74,3 +74,34 @@ class Feature_Decoder(nn.Module):
         out = torch.tanh(out)
         
         return out, out_
+
+class Feature_Decoder_32(nn.Module):
+    def __init__(self):
+        super(Feature_Decoder_32, self).__init__()
+        self.upsample = nn.Upsample(scale_factor = 2)
+        #self.conv1 = nn.Conv2d(512, 256, 1, stride = 1, padding = 0)
+        #self.conv2 = nn.Conv2d(256, 128, 1, stride = 1, padding = 0)
+        #self.conv3 = nn.Conv2d(128, 64, 1, stride = 1, padding = 0)
+        self.conv1 = nn.Conv2d(64, 32, 1, stride = 1, padding = 0)
+        self.conv2 = nn.Conv2d(32, 16, 1, stride = 1, padding = 0)
+        self.conv3 = nn.Conv2d(16, 3, 1, stride = 1, padding = 0)
+        self.conv4 = nn.Conv2d(3, 3, 1, stride = 1, padding = 0)
+        self.conv_31 = nn.Conv2d(32, 32, 3, stride=1, padding=1)
+        self.conv_32 = nn.Conv2d(16, 16, 3, stride=1, padding=1)
+        self.conv_33 = nn.Conv2d(3, 3, 3, stride=1, padding=1)
+
+    def forward(self, x, f1, f2, f3, f4):
+        out = self.conv1(self.upsample(f4)) # 16 16 32
+        out = self.conv_31(out + f3) # 16 16 32
+        #print("f3 shape : ",out.shape)
+        
+        out = self.conv2(self.upsample(out)) # 32 32 16
+        out = self.conv_32(out + f2) #32 32 16
+        #print("f2 shape : ",out.shape)
+        
+        out_ = self.conv3(out) # 32 32 3
+        out = (x + out_)
+        out = self.conv4(out)
+        out = torch.tanh(out)
+        
+        return out,out_        

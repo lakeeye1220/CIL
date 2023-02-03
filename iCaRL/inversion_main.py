@@ -1,6 +1,6 @@
 from inversion_model.inversion_eeil import EEILmodel
 from inversion_model.inversion_iCaRL import iCaRLmodel
-from ResNet import resnet18_cbam, resnet34_cbam
+from ResNet import resnet18_cbam, resnet34_cbam, resnet32
 import torch
 import parser
 import argparse
@@ -20,9 +20,11 @@ parser.add_argument('--prefix',type=str,default="Buffer_",help="directory name "
 parser.add_argument('--dataset_path',type=str,default="../../data/dataset/",help="dataset directory name ")
 parser.add_argument('--model',type=str,default="icarl",help="directory name ")
 parser.add_argument('--eeil_aug',type=bool,default=False,help="Apply EEIL Aug")
-parser.add_argument('--lr_steps', help='lr decaying epoch determination', default=[48,62,100],
+#parser.add_argument('--lr_steps', help='lr decaying epoch determination', default=[48,62,80],
+#                        type=lambda s: [int(item) for item in s.split(',')])
+parser.add_argument('--lr_steps', help='lr decaying epoch determination', default=[45,90],
                         type=lambda s: [int(item) for item in s.split(',')])
-parser.add_argument('--lr_decay', type=float, default=0.5, help='lr decaying rate')
+parser.add_argument('--lr_decay', type=float, default=0.1, help='lr decaying rate')
 parser.add_argument('--momentum', default='0.9', type=float, help='momentum')
 
 #parser=create_args()
@@ -31,8 +33,8 @@ args = parser.parse_args()
 configs=vars(args)
 
 torch.manual_seed(args.seed)
-feature_extractor=resnet34_cbam()
-
+#feature_extractor=resnet34_cbam()
+feature_extractor=resnet32(out_dim=args.numclass)
 model_dict={
     'icarl':iCaRLmodel,
     'eeil':EEILmodel,

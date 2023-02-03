@@ -9,10 +9,11 @@ import torch.optim as optim
 
 from inversion_CIFAR100 import iCIFAR100
 from torch.utils.data import DataLoader
-from ResNet import resnet34_cbam
+from ResNet import resnet34_cbam,resnet32
 import pandas as pd
 import os
 import sys
+import copy
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -24,9 +25,9 @@ class network(nn.Module):
         self.fc = nn.Linear(feature_extractor.fc.in_features, numclass, bias=True)
 
     def forward(self, input):
-        x,f4,f3,f2,f1,f0 = self.feature(input)
+        x,f3,f2,f1,f0 = self.feature(input)
         x = self.fc(x)
-        return x,f4,f3,f2,f1,f0 
+        return x,f3,f2,f1,f0 
 
     def Incremental_learning(self, numclass):
         weight = self.fc.weight.data
@@ -129,7 +130,8 @@ class iCaRLmodel:
     # evaluate model
     def train(self):
         accuracy = 0.0
-        opt = optim.SGD(self.model.parameters(), lr=self.learning_rate,weight_decay=0.00001,momentum=self.configs['momentum'])
+        #opt = optim.SGD(self.model.parameters(), lr=self.learning_rate,weight_decay=0.0001,momentum=self.configs['momentum'])
+        opt = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=2e-4)
         lr_scheduler= optim.lr_scheduler.MultiStepLR(opt, milestones=self.configs['lr_steps'], gamma=self.configs['lr_decay'])
         for epoch in range(self.epochs):
 
@@ -162,7 +164,7 @@ class iCaRLmodel:
         for setp, (indexs, imgs, labels) in enumerate(testloader):
             imgs, labels = imgs.to(device), labels.to(device)
             with torch.no_grad():
-                outputs,_,_,_,_,_ = self.model(imgs) if mode == 1 else self.classify(imgs)
+                outputs,_,_,_,_ = self.model(imgs) if mode == 1 else self.classify(imgs)
             predicts = torch.max(outputs, dim=1)[1] if mode == 1 else outputs
             correct += (predicts.cpu() == labels.cpu()).sum()
             total += len(labels)
@@ -173,13 +175,13 @@ class iCaRLmodel:
 
 
     def _compute_loss(self, indexs, imgs, target):
-        output,_,_,_,_,_ =self.model(imgs)
+        output,_,_,_,_ = self.model(imgs)
         target = get_one_hot(target, self.numclass)
         output, target = output.to(device), target.to(device)
         if self.old_model == None:
             return F.binary_cross_entropy_with_logits(output, target)
         else:
-            old_output,_,_,_,_,_ = self.old_model(imgs)
+            old_output,_,_,_,_ = self.old_model(imgs)
             old_target = torch.sigmoid(old_output)
             old_task_size = old_target.shape[1]
             target[..., :old_task_size] = old_target
@@ -199,9 +201,17 @@ class iCaRLmodel:
         os.makedirs(self.filename,exist_ok=True)
         pd.DataFrame(self.accuracies).to_csv(self.filename+"/top1_acc.csv",header=False,index=False)
 
-        self.filename = self.filename+'_ResNet34.pt'
-        torch.save(self.model,'./'+self.filename)
-        self.old_model=torch.load('./'+self.filename)
+
+        self.filename = self.filename+'_ResNet32.pt'
+        model_state = self.model.state_dict()
+        for key in model_state.keys():  # Always save it to cpu
+            model_state[key] = model_state[key].cpu()
+        torch.save(model_state, self.filename)
+
+        #torch.save(self.model,'./'+self.filename)
+        self.old_model = copy.deepcopy(self.model)
+        self.old_model.load_state_dict(torch.load(self.filename))
+        #self.old_model=torch.load('./'+self.filename)
         self.old_model.to(device)
         self.old_model.eval()
         
@@ -210,7 +220,7 @@ class iCaRLmodel:
         class_mean, feature_extractor_output = self.compute_class_mean(images, self.transform)
         exemplar = []
         #ResNet layer4's dimension : 512
-        now_class_mean = np.zeros((1, 512))
+        now_class_mean = np.zeros((1, 64))
      
         for i in range(m):
             # shape batch_size*512

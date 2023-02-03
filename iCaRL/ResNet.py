@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import torch.utils.model_zoo as model_zoo
+import torch.nn.functional as F
 
 
 __all__ = ['ResNet', 'resnet18_cbam','resnet32', 'resnet34_cbam', 'resnet50_cbam', 'resnet56','resnet101_cbam',
@@ -16,6 +17,13 @@ model_urls = {
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
 }
 
+class LambdaLayer(nn.Module):
+    def __init__(self, lambd):
+        super(LambdaLayer, self).__init__()
+        self.lambd = lambd
+
+    def forward(self, x):
+        return self.lambd(x)
 
 def conv3x3(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
@@ -98,6 +106,36 @@ class BasicBlock(nn.Module):
 
         return out
 
+class BasicBlock_32(nn.Module):
+    expansion = 1
+    def __init__(self, in_planes, planes, stride=1, option='A'):
+        super(BasicBlock_32, self).__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != planes:
+            if option == 'A':
+                """
+                For CIFAR10 ResNet paper uses option A.
+                """
+                self.shortcut = LambdaLayer(lambda x:
+                                            F.pad(x[:, :, ::2, ::2], (0, 0, 0, 0, planes//4, planes//4), "constant", 0))
+            elif option == 'B':
+                self.shortcut = nn.Sequential(
+                     nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                     nn.BatchNorm2d(self.expansion * planes)
+                )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -145,7 +183,7 @@ class Bottleneck(nn.Module):
         return out
 
 
-class ResNet(nn.Module):
+class ResNet_34(nn.Module):
 
     def __init__(self, block, layers, num_classes=100):
         self.inplanes = 64
@@ -210,12 +248,51 @@ class ResNet(nn.Module):
         #else:
         #    return x
 
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10):
+        super(ResNet, self).__init__()
+        self.in_planes = 16
+        self.margin = 4
+
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 64, num_blocks[2], stride=2)
+        self.fc = nn.Linear(64, num_classes)
+        #self.lsoftmax_linear = LSoftmaxLinear(input_features=64, output_features=num_classes, margin=self.margin)
+        #self.apply(_weights_init)
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1]*(num_blocks-1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, stride))
+            self.in_planes = planes * block.expansion
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x, out_feature=True):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out1 = self.layer1(out)
+        out2 = self.layer2(out1)
+        out3 = self.layer3(out2)
+        out4 = F.avg_pool2d(out3, out3.size()[3])
+        #out4 = F.normalize(out4,p=2,dim=1)
+        out_pen = out4.view(out4.size(0), -1)
+        #print("normalized ",out4)
+        if out_feature:
+            return out_pen, out3, out2, out1, out
+        else:
+            #out = self.last(out_pen)
+            return out_pen
+
 def resnet18_cbam(pretrained=False, **kwargs):
     """Constructs a ResNet-18 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
+    model = ResNet_34(BasicBlock, [2, 2, 2, 2], **kwargs)
     if pretrained:
         pretrained_state_dict = model_zoo.load_url(model_urls['resnet18'])
         now_state_dict        = model.state_dict()
@@ -223,17 +300,15 @@ def resnet18_cbam(pretrained=False, **kwargs):
         model.load_state_dict(now_state_dict)
     return model
 
-def resnet32():
-    model = ResNet(BasicBlock,[5,5,5])
-    #print(model)
-    return model
+def resnet32(out_dim):
+    return ResNet(BasicBlock_32, [5, 5, 5], num_classes=out_dim)
 
 def resnet34_cbam(pretrained=False, **kwargs):
     """Constructs a ResNet-34 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
+    model = ResNet_34(BasicBlock, [3, 4, 6, 3], **kwargs)
     if pretrained:
         pretrained_state_dict = model_zoo.load_url(model_urls['resnet34'])
         now_state_dict        = model.state_dict()
@@ -247,7 +322,7 @@ def resnet50_cbam(pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = ResNet_34(Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
         pretrained_state_dict = model_zoo.load_url(model_urls['resnet50'])
         now_state_dict        = model.state_dict()
@@ -264,7 +339,7 @@ def resnet101_cbam(pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = ResNet_34(Bottleneck, [3, 4, 23, 3], **kwargs)
     if pretrained:
         pretrained_state_dict = model_zoo.load_url(model_urls['resnet101'])
         now_state_dict        = model.state_dict()
@@ -278,7 +353,7 @@ def resnet152_cbam(pretrained=False, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
+    model = ResNet_34(Bottleneck, [3, 8, 36, 3], **kwargs)
     if pretrained:
         pretrained_state_dict = model_zoo.load_url(model_urls['resnet152'])
         now_state_dict        = model.state_dict()

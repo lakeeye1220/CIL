@@ -27,10 +27,10 @@ import pickle
 import os
 import itertools
 from tqdm import tqdm
-from NaturalInversion.network import Generator, Feature_Decoder
+from NaturalInversion.network import Generator, Feature_Decoder, Feature_Decoder_32
 
 sys.path.insert(0,'..')
-from iCaRL.ResNet import resnet34_cbam as ResNet34
+from iCaRL.ResNet import resnet34_cbam, resnet32
 #from models.resnet import ResNet34
 #import learners
 
@@ -127,7 +127,7 @@ def get_images(net,
         optimizer_g = optim.Adam(generator.parameters(), lr=g_lr)
 
         #### Feature_Map Decoder
-        feature = Feature_Decoder().to(device)
+        feature = Feature_Decoder_32().to(device)
         optimizer_f = torch.optim.Adam(feature.parameters(), lr=d_lr)
 
         # Learnable Scale Parameter
@@ -169,9 +169,9 @@ def get_images(net,
             ##### step2
             input_for_f = inputs_jit.clone().detach()
             with torch.no_grad():
-                _, f5, f4, f3, f2, f1 = net(input_for_f)
+                _,f4, f3, f2, f1 = net(input_for_f)
         
-            inputs_jit, addition = feature(inputs_jit, f1, f2, f3, f4, f5)
+            inputs_jit, addition = feature(inputs_jit, f1, f2, f3, f4)
 
             ##### step3
             inputs_jit = inputs_jit * alpha
@@ -186,7 +186,13 @@ def get_images(net,
             flip = random.random() > 0.5
             if flip:
                 inputs_jit = torch.flip(inputs_jit, dims = (3,))
-            outputs, f5, f4, f3, f2, f1 = net(inputs_jit)
+            outputs, f4, f3, f2, f1 = net(inputs_jit)
+
+
+            ##saliency map
+            #_, scores_max_index = torch.max(outputs, dim=1)
+            #print("scores max index shape :",scores_max_index)
+            #score_max = torch.sum(outputs[0,scores_max_index])
         
             loss_target = criterion(outputs, targets)
             loss = loss_target
@@ -207,7 +213,7 @@ def get_images(net,
             loss = loss + l2_coeff * torch.norm(inputs_jit, 2)
 
             if debug_output and epoch % 100==0:
-                print("It {}\t Losses: total: {:.3f},\ttarget: {:.3f} \tR_feature_loss unscaled:\t {:.3f}\tstyle_loss : {:.3f}".format(epoch, loss.item(),loss_target,loss_distr.item(), 0))
+                print("It {}\t Losses: total: {:.3f},\ttarget: {:.3f} \tR_feature_loss unscaled:\t {:.3f}".format(epoch, loss.item(),loss_target,loss_distr.item()))
                 nchs = inputs_jit.shape[1]
 
                 save_pth = '../iCaRL/'+prefix+'/task_{}/'.format(task)
@@ -220,8 +226,8 @@ def get_images(net,
                 best_cost = loss.item()
                 with torch.no_grad():
                     best_inputs = generator(z)
-                    _, f5, f4, f3, f2, f1 = net(best_inputs)
-                    best_inputs, addition = feature(best_inputs, f1, f2, f3, f4, f5)
+                    _,f4, f3, f2, f1 = net(best_inputs)
+                    best_inputs, addition = feature(best_inputs, f1, f2, f3, f4)
                     best_inputs *= alpha
         
             optimizer_g.zero_grad()
@@ -234,7 +240,20 @@ def get_images(net,
             optimizer_g.step()
             optimizer_f.step()
             optimizer_alpha.step()
+        ##saliency map
+        '''
+        best_inputs.requires_grad = True
+        outputs, f4, f3, f2, f1 = net(best_inputs)
+        _, scores_max_index = torch.max(outputs, dim=1)
+        score_max = torch.sum(outputs[:,scores_max_index])
+        score_max.backward()
 
+        saliency, _ = torch.max(best_inputs.grad.data.abs(), dim=1)
+        saliency = saliency.reshape(bs,1,32,32)
+        best_inputs.requires_grad = False
+        best_inputs = best_inputs*saliency 
+        vutils.save_image(best_inputs.data.clone(),save_pth+'saliency.png',normalize=True, scale_each=True, nrow=10)
+        '''
         best_inputs_list.append(best_inputs.cpu().detach().numpy())
         best_targets_list.append(targets.cpu().detach().numpy())
     
